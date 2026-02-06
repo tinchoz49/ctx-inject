@@ -1,0 +1,36 @@
+{
+  "name": "ctx-inject",
+  "version": "0.1.0",
+  "description": "Strongly-typed chainable DI context builder",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node --format esm --packages external && tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt --write src/ test/",
+    "format:check": "oxfmt --check src/ test/",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun test",
+    "prepublishOnly": "bun run check && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "oxfmt": "^0.28.0",
+    "oxlint": "^1.43.0",
+    "typescript": "^5.8",
+    "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  }
+}

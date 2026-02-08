@@ -13,7 +13,7 @@ describe('simple plugin', () => {
       },
     });
 
-    const ctx = await createContext().use(greeter).build();
+    const ctx = await createContext().use(greeter).ready();
 
     expect(ctx.greet('World')).toBe('Hello, World!');
   });
@@ -31,7 +31,7 @@ describe('async plugin', () => {
       },
     });
 
-    const ctx = await createContext().use(asyncPlugin).build();
+    const ctx = await createContext().use(asyncPlugin).ready();
 
     expect(ctx.value).toBe(42);
   });
@@ -58,7 +58,7 @@ describe('plugin with dependencies', () => {
       },
     });
 
-    const ctx = await createContext().use(loggerPlugin).use(servicePlugin).build();
+    const ctx = await createContext().use(loggerPlugin).use(servicePlugin).ready();
 
     expect(ctx.service.result).toEqual(['init']);
     expect(ctx.logger.log('test')).toEqual(['test']);
@@ -92,7 +92,7 @@ describe('transitive dependencies', () => {
       },
     });
 
-    const ctx = await createContext().use(a).use(b).use(c).build();
+    const ctx = await createContext().use(a).use(b).use(c).ready();
 
     expect(ctx.a).toBe(1);
     expect(ctx.b).toBe(2);
@@ -111,10 +111,33 @@ describe('duplicate plugin', () => {
       setup: setupFn,
     });
 
-    const ctx = await createContext().use(p).use(p).build();
+    const ctx = await createContext().use(p).use(p).ready();
 
     expect(setupFn).toHaveBeenCalledTimes(1);
     expect(ctx.val).toBe('once');
+  });
+});
+
+// ─── 5b. ready() idempotency ─────────────────────────────────────────────────
+
+describe('ready idempotency', () => {
+  test('multiple ready() calls return the same promise and run setup once', async () => {
+    const setupFn = mock(() => ({ val: 'once' }));
+
+    const p = plugin({
+      name: 'idem',
+      setup: setupFn,
+    });
+
+    const builder = createContext().use(p);
+    const p1 = builder.ready();
+    const p2 = builder.ready();
+
+    expect(p1).toBe(p2);
+
+    const [ctx1, ctx2] = await Promise.all([p1, p2]);
+    expect(ctx1).toBe(ctx2);
+    expect(setupFn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -134,7 +157,7 @@ describe('missing dependency', () => {
     });
 
     // Cast to bypass type constraint — runtime should still catch it
-    await expect((createContext() as any).use(b).build()).rejects.toThrow(
+    await expect((createContext() as any).use(b).ready()).rejects.toThrow(
       /requires "a" to be registered before it/,
     );
   });
@@ -172,7 +195,7 @@ describe('dispose', () => {
       },
     });
 
-    const ctx = await createContext().use(first).use(second).use(third).build();
+    const ctx = await createContext().use(first).use(second).use(third).ready();
 
     await ctx.close();
     expect(order).toEqual(['third', 'second', 'first']);
@@ -182,13 +205,34 @@ describe('dispose', () => {
     expect(order).toEqual(['third', 'second', 'first']);
   });
 
+  test('concurrent close() calls share the same promise', async () => {
+    const disposeFn = mock(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    const p = plugin({
+      name: 'slow-dispose',
+      setup: () => ({ slow: true }),
+      dispose: disposeFn,
+    });
+
+    const ctx = await createContext().use(p).ready();
+
+    const c1 = ctx.close();
+    const c2 = ctx.close();
+    expect(c1).toBe(c2);
+
+    await Promise.all([c1, c2]);
+    expect(disposeFn).toHaveBeenCalledTimes(1);
+  });
+
   test('close is non-enumerable', async () => {
     const p = plugin({
       name: 'p',
       setup: () => ({ x: 1 }),
     });
 
-    const ctx = await createContext().use(p).build();
+    const ctx = await createContext().use(p).ready();
 
     expect(Object.keys(ctx)).toEqual(['x']);
     expect(typeof ctx.close).toBe('function');
@@ -207,7 +251,7 @@ describe('plugin with options', () => {
       },
     });
 
-    const ctx = await createContext().use(configPlugin, { port: 3000, host: 'localhost' }).build();
+    const ctx = await createContext().use(configPlugin, { port: 3000, host: 'localhost' }).ready();
 
     expect(ctx.config.port).toBe(3000);
     expect(ctx.config.host).toBe('localhost');
@@ -225,7 +269,7 @@ describe('plugin with options', () => {
     await expect(
       createContext()
         .use(configPlugin, { port: 'not-a-number', host: 123 } as any)
-        .build(),
+        .ready(),
     ).rejects.toThrow();
   });
 });
@@ -252,7 +296,7 @@ describe('setup error cleanup', () => {
       },
     });
 
-    await expect(createContext().use(good).use(bad).build()).rejects.toThrow(PluginSetupError);
+    await expect(createContext().use(good).use(bad).ready()).rejects.toThrow(PluginSetupError);
 
     expect(disposed).toEqual(['good']);
   });
@@ -266,7 +310,7 @@ describe('setup error cleanup', () => {
     });
 
     try {
-      await createContext().use(failing).build();
+      await createContext().use(failing).ready();
       expect(true).toBe(false); // should not reach
     } catch (err) {
       expect(err).toBeInstanceOf(PluginSetupError);
@@ -285,7 +329,7 @@ describe('type-level correctness', () => {
       setup: () => ({ val: 'hello' }),
     });
 
-    const ctx = await createContext().use(p).build();
+    const ctx = await createContext().use(p).ready();
 
     // Runtime freeze check
     expect(() => {
@@ -306,7 +350,7 @@ describe('type-level correctness', () => {
       setup: () => ({ shared: 2 }),
     });
 
-    await expect(createContext().use(a).use(b).build()).rejects.toThrow(/already exists/);
+    await expect(createContext().use(a).use(b).ready()).rejects.toThrow(/already exists/);
   });
 
   test('compile-time type inference works', async () => {
@@ -337,7 +381,7 @@ describe('type-level correctness', () => {
     const ctx = await createContext()
       .use(loggerPlugin)
       .use(dbPlugin, { url: 'postgres://localhost' })
-      .build();
+      .ready();
 
     // These lines verify type inference at compile time
     const _logger: Console = ctx.logger;

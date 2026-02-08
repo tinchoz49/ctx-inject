@@ -93,7 +93,7 @@ type ResolveDepsImpl<
 export type ResolveDeps<Deps extends readonly AnyPlugin[]> = ResolveDepsImpl<Deps, []>;
 
 /**
- * The built context: a frozen object with all accumulated decorations
+ * The initialized context: a frozen object with all accumulated decorations
  * plus a non-enumerable `close()` method.
  */
 export type Context<T> = Readonly<T> & { close(): Promise<void> };

@@ -40,7 +40,7 @@ const db = plugin({
 const ctx = await createContext()
   .use(logger)
   .use(db, { url: 'postgres://localhost/mydb' })
-  .build();
+  .ready();
 
 ctx.logger; // Console - fully typed
 ctx.db;     // connection - fully typed
@@ -51,7 +51,7 @@ await ctx.close(); // disposes in reverse order
 ## Features
 
 - **Full type inference** - Every `.use()` call accumulates types. The final context is fully typed with no manual annotations needed.
-- **Chainable API** - Fluent builder pattern: `createContext().use(a).use(b).build()`
+- **Chainable API** - Fluent builder pattern: `createContext().use(a).use(b).ready()`
 - **Plugin dependencies** - Plugins declare dependencies as a contract. TypeScript enforces that all dependencies are registered before the dependent plugin.
 - **Plugin options** - Plugins can declare a Zod schema for typed, validated configuration options.
 - **Lifecycle management** - Optional `dispose` handlers are called in reverse initialization order on `ctx.close()`.
@@ -100,7 +100,7 @@ const mailer = plugin({
 |---|---|---|
 | `name` | Yes | Unique plugin identifier |
 | `dependencies` | No | Array of plugins this plugin depends on. Acts as a type-level contract — all must be registered via `.use()` before this plugin. |
-| `options` | No | Zod schema for plugin options. When provided, `.use()` requires a matching options argument and the value is validated at build time. |
+| `options` | No | Zod schema for plugin options. When provided, `.use()` requires a matching options argument and the value is validated at initialization time. |
 | `setup(ctx, options?)` | Yes | Receives resolved dependency context (and validated options if `options` schema is declared). Returns an object of values to add to the context. Can be async. |
 | `dispose(decorations)` | No | Teardown handler. Receives the object returned by `setup`. Can be async. |
 
@@ -116,15 +116,15 @@ Registers a plugin. Returns the builder for chaining.
 
 All dependencies declared by the plugin must be registered (via prior `.use()` calls) before this plugin — enforced at the type level. If the plugin declares an `options` Zod schema, a matching options argument is required.
 
-#### `.build(): Promise<Context<T>>`
+#### `.ready(): Promise<Context<T>>`
 
-Initializes all registered plugins in registration order and returns a frozen context object.
+Initializes all registered plugins in registration order and returns a frozen context object. Multiple calls return the same promise — initialization only runs once.
 
 The context includes all values returned by plugin `setup` functions, plus a non-enumerable `close()` method.
 
 #### `ctx.close(): Promise<void>`
 
-Calls `dispose` on all plugins in reverse initialization order. Calling `close()` a second time is a no-op.
+Calls `dispose` on all plugins in reverse initialization order. Multiple calls return the same promise — disposal only runs once.
 
 ## Dependencies
 
@@ -136,13 +136,13 @@ const b = plugin({ name: 'b', dependencies: [a], setup: (ctx) => ({ b: ctx.a + 1
 const c = plugin({ name: 'c', dependencies: [b], setup: (ctx) => ({ c: ctx.a + ctx.b }) });
 
 // All plugins must be explicitly registered in order
-const ctx = await createContext().use(a).use(b).use(c).build();
+const ctx = await createContext().use(a).use(b).use(c).ready();
 ctx.a // 1
 ctx.b // 2
 ctx.c // 3
 
 // This would be a type error — b's dependency (a) is not registered:
-// createContext().use(b).build();
+// createContext().use(b).ready();
 ```
 
 Duplicate registrations are skipped (setup is only called once per plugin).
@@ -151,13 +151,13 @@ Duplicate registrations are skipped (setup is only called once per plugin).
 
 ### `PluginSetupError`
 
-Thrown during `.build()` if a plugin's setup function throws. All already-initialized plugins are disposed before the error propagates.
+Thrown during `.ready()` if a plugin's setup function throws. All already-initialized plugins are disposed before the error propagates.
 
 ```ts
 import { PluginSetupError } from 'ctx-inject';
 
 try {
-  await createContext().use(flakyPlugin).build();
+  await createContext().use(flakyPlugin).ready();
 } catch (err) {
   if (err instanceof PluginSetupError) {
     console.log(err.pluginName); // 'flaky'

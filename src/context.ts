@@ -26,6 +26,7 @@ async function disposeAll(
 
 export class ContextBuilder<T = {}> {
   private plugins: Map<string, PluginEntry> = new Map();
+  private _readyPromise: Promise<Context<T>> | null = null;
 
   /**
    * Registers a plugin. Duplicate registrations are skipped.
@@ -65,10 +66,18 @@ export class ContextBuilder<T = {}> {
   }
 
   /**
-   * Build the context: run all plugin setups in registration order,
+   * Initialize the context: run all plugin setups in registration order,
    * freeze the result, and attach a non-enumerable `close()` method.
+   * Multiple calls return the same promise.
    */
-  async build(): Promise<Context<T>> {
+  ready(): Promise<Context<T>> {
+    if (!this._readyPromise) {
+      this._readyPromise = this._initialize();
+    }
+    return this._readyPromise;
+  }
+
+  private async _initialize(): Promise<Context<T>> {
     const ctx: Record<string, unknown> = {};
     const initialized: Array<{
       plugin: AnyPlugin;
@@ -114,18 +123,17 @@ export class ContextBuilder<T = {}> {
       initializedNames.add(entry.plugin.name);
     }
 
-    // Dispose stack — cleared after first close to make double-close a no-op
-    let disposeStack: typeof initialized | null = [...initialized];
+    let closePromise: Promise<void> | null = null;
 
     Object.defineProperty(ctx, 'close', {
       enumerable: false,
       configurable: false,
       writable: false,
-      value: async () => {
-        if (!disposeStack) return;
-        const stack = disposeStack;
-        disposeStack = null;
-        await disposeAll(stack);
+      value: () => {
+        if (!closePromise) {
+          closePromise = disposeAll([...initialized]);
+        }
+        return closePromise;
       },
     });
 

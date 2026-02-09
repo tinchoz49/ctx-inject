@@ -1,4 +1,4 @@
-import { PluginSetupError } from './errors';
+import { PluginSetupError, ReservedKeyError } from './errors';
 import type {
   AnyPlugin,
   Context,
@@ -13,6 +13,8 @@ interface PluginEntry {
   options?: unknown;
 }
 
+const RESERVED_KEYS = ['ready', 'close'];
+
 async function disposeAll(
   initialized: Array<{ plugin: AnyPlugin; decorations: Record<string, unknown> }>,
 ) {
@@ -26,7 +28,6 @@ async function disposeAll(
 
 export class ContextBuilder<T = {}> {
   private plugins: Map<string, PluginEntry> = new Map();
-  private _readyPromise: Promise<Context<T>> | null = null;
 
   /**
    * Registers a plugin. Duplicate registrations are skipped.
@@ -66,64 +67,31 @@ export class ContextBuilder<T = {}> {
   }
 
   /**
-   * Initialize the context: run all plugin setups in registration order,
-   * freeze the result, and attach a non-enumerable `close()` method.
-   * Multiple calls return the same promise.
+   * Build the context synchronously. Returns a context with full type inference
+   * but plugins are not yet initialized. Call `ctx.ready()` to initialize.
    */
-  ready(): Promise<Context<T>> {
-    if (!this._readyPromise) {
-      this._readyPromise = this._initialize();
-    }
-    return this._readyPromise;
-  }
-
-  private async _initialize(): Promise<Context<T>> {
+  build(): Context<T> {
+    const plugins = [...this.plugins.values()];
     const ctx: Record<string, unknown> = {};
     const initialized: Array<{
       plugin: AnyPlugin;
       decorations: Record<string, unknown>;
     }> = [];
-    const initializedNames = new Set<string>();
 
-    for (const [, entry] of this.plugins) {
-      // Runtime dependency check
-      for (const dep of entry.plugin.dependencies) {
-        if (!initializedNames.has(dep.name)) {
-          await disposeAll(initialized);
-          throw new Error(
-            `Plugin "${entry.plugin.name}" requires "${dep.name}" to be registered before it`,
-          );
-        }
-      }
-
-      let decorations: Record<string, unknown>;
-      try {
-        if (entry.plugin.options) {
-          entry.options = entry.plugin.options.parse(entry.options);
-        }
-        decorations = await entry.plugin.setup(ctx, entry.options);
-      } catch (err) {
-        // Dispose already-initialized plugins in reverse order
-        await disposeAll(initialized);
-        throw new PluginSetupError(entry.plugin.name, err);
-      }
-
-      // Check for key collisions
-      for (const key of Object.keys(decorations)) {
-        if (key in ctx) {
-          await disposeAll(initialized);
-          throw new Error(
-            `Plugin "${entry.plugin.name}" tried to add key "${key}" which already exists in the context`,
-          );
-        }
-      }
-
-      Object.assign(ctx, decorations);
-      initialized.push({ plugin: entry.plugin, decorations });
-      initializedNames.add(entry.plugin.name);
-    }
-
+    let readyPromise: Promise<void> | null = null;
     let closePromise: Promise<void> | null = null;
+
+    Object.defineProperty(ctx, 'ready', {
+      enumerable: false,
+      configurable: false,
+      writable: false,
+      value: () => {
+        if (!readyPromise) {
+          readyPromise = initialize(ctx, plugins, initialized);
+        }
+        return readyPromise;
+      },
+    });
 
     Object.defineProperty(ctx, 'close', {
       enumerable: false,
@@ -137,10 +105,64 @@ export class ContextBuilder<T = {}> {
       },
     });
 
-    Object.freeze(ctx);
-
     return ctx as Context<T>;
   }
+}
+
+async function initialize(
+  ctx: Record<string, unknown>,
+  plugins: PluginEntry[],
+  initialized: Array<{ plugin: AnyPlugin; decorations: Record<string, unknown> }>,
+): Promise<void> {
+  const initializedNames = new Set<string>();
+
+  for (const entry of plugins) {
+    // Runtime dependency check
+    for (const dep of entry.plugin.dependencies) {
+      if (!initializedNames.has(dep.name)) {
+        await disposeAll(initialized);
+        throw new Error(
+          `Plugin "${entry.plugin.name}" requires "${dep.name}" to be registered before it`,
+        );
+      }
+    }
+
+    let decorations: Record<string, unknown>;
+    try {
+      if (entry.plugin.options) {
+        entry.options = entry.plugin.options.parse(entry.options);
+      }
+      decorations = await entry.plugin.setup(ctx, entry.options);
+    } catch (err) {
+      // Dispose already-initialized plugins in reverse order
+      await disposeAll(initialized);
+      throw new PluginSetupError(entry.plugin.name, err);
+    }
+
+    // Check for reserved keys
+    for (const key of Object.keys(decorations)) {
+      if (RESERVED_KEYS.includes(key)) {
+        await disposeAll(initialized);
+        throw new ReservedKeyError(entry.plugin.name, key);
+      }
+    }
+
+    // Check for key collisions
+    for (const key of Object.keys(decorations)) {
+      if (key in ctx) {
+        await disposeAll(initialized);
+        throw new Error(
+          `Plugin "${entry.plugin.name}" tried to add key "${key}" which already exists in the context`,
+        );
+      }
+    }
+
+    Object.assign(ctx, decorations);
+    initialized.push({ plugin: entry.plugin, decorations });
+    initializedNames.add(entry.plugin.name);
+  }
+
+  Object.freeze(ctx);
 }
 
 export function createContext(): ContextBuilder {

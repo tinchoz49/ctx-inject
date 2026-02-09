@@ -96,7 +96,7 @@ export type ResolveDeps<Deps extends readonly AnyPlugin[]> = ResolveDepsImpl<Dep
  * The initialized context: a frozen object with all accumulated decorations
  * plus a non-enumerable `close()` method.
  */
-export type Context<T> = Readonly<T> & { close(): Promise<void> };
+export type Context<T> = Readonly<T> & { ready(): Promise<void>; close(): Promise<void> };
 
 /**
  * Extracts the options type from a plugin with options.

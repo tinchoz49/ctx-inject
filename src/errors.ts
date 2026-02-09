@@ -5,6 +5,16 @@ export class CircularDependencyError extends Error {
   }
 }
 
+export class ReservedKeyError extends Error {
+  constructor(
+    public readonly pluginName: string,
+    public readonly key: string,
+  ) {
+    super(`Plugin "${pluginName}" tried to add key "${key}" which is a reserved context method`);
+    this.name = 'ReservedKeyError';
+  }
+}
+
 export class PluginSetupError extends Error {
   constructor(
     public readonly pluginName: string,

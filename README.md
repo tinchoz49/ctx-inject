@@ -37,10 +37,12 @@ const db = plugin({
   },
 });
 
-const ctx = await createContext()
+const ctx = createContext()
   .use(logger)
   .use(db, { url: 'postgres://localhost/mydb' })
-  .ready();
+  .build();
+
+await ctx.ready(); // initializes all plugins
 
 ctx.logger; // Console - fully typed
 ctx.db;     // connection - fully typed
@@ -51,12 +53,14 @@ await ctx.close(); // disposes in reverse order
 ## Features
 
 - **Full type inference** - Every `.use()` call accumulates types. The final context is fully typed with no manual annotations needed.
-- **Chainable API** - Fluent builder pattern: `createContext().use(a).use(b).ready()`
+- **Chainable API** - Fluent builder pattern: `createContext().use(a).use(b).build()`
+- **Synchronous build** - `.build()` returns the context synchronously with full type inference. Call `ctx.ready()` to initialize plugins.
 - **Plugin dependencies** - Plugins declare dependencies as a contract. TypeScript enforces that all dependencies are registered before the dependent plugin.
 - **Plugin options** - Plugins can declare a Zod schema for typed, validated configuration options.
 - **Lifecycle management** - Optional `dispose` handlers are called in reverse initialization order on `ctx.close()`.
 - **Graceful error handling** - If a plugin fails during setup, all already-initialized plugins are disposed before the error propagates.
-- **Frozen context** - The built context is `Object.freeze()`'d. The `close()` method is non-enumerable.
+- **Frozen context** - The context is `Object.freeze()`'d after `ready()`. The `ready()` and `close()` methods are non-enumerable.
+- **Reserved keys** - `ready` and `close` are reserved context methods. Plugins that try to add these keys will throw a `ReservedKeyError`.
 - **Zod validation** - Options are validated at runtime via Zod schemas, with full type inference.
 
 ## API
@@ -116,11 +120,13 @@ Registers a plugin. Returns the builder for chaining.
 
 All dependencies declared by the plugin must be registered (via prior `.use()` calls) before this plugin — enforced at the type level. If the plugin declares an `options` Zod schema, a matching options argument is required.
 
-#### `.ready(): Promise<Context<T>>`
+#### `.build(): Context<T>`
 
-Initializes all registered plugins in registration order and returns a frozen context object. Multiple calls return the same promise — initialization only runs once.
+Returns the context object synchronously with full type inference. The context has `ready()` and `close()` methods (non-enumerable). Plugin decorations are available on the type but are not initialized until `ready()` is called.
 
-The context includes all values returned by plugin `setup` functions, plus a non-enumerable `close()` method.
+#### `ctx.ready(): Promise<void>`
+
+Initializes all registered plugins in registration order and freezes the context. Multiple calls return the same promise — initialization only runs once.
 
 #### `ctx.close(): Promise<void>`
 
@@ -136,13 +142,14 @@ const b = plugin({ name: 'b', dependencies: [a], setup: (ctx) => ({ b: ctx.a + 1
 const c = plugin({ name: 'c', dependencies: [b], setup: (ctx) => ({ c: ctx.a + ctx.b }) });
 
 // All plugins must be explicitly registered in order
-const ctx = await createContext().use(a).use(b).use(c).ready();
+const ctx = createContext().use(a).use(b).use(c).build();
+await ctx.ready();
 ctx.a // 1
 ctx.b // 2
 ctx.c // 3
 
 // This would be a type error — b's dependency (a) is not registered:
-// createContext().use(b).ready();
+// createContext().use(b).build();
 ```
 
 Duplicate registrations are skipped (setup is only called once per plugin).
@@ -151,17 +158,41 @@ Duplicate registrations are skipped (setup is only called once per plugin).
 
 ### `PluginSetupError`
 
-Thrown during `.ready()` if a plugin's setup function throws. All already-initialized plugins are disposed before the error propagates.
+Thrown during `ctx.ready()` if a plugin's setup function throws. All already-initialized plugins are disposed before the error propagates.
 
 ```ts
 import { PluginSetupError } from 'ctx-inject';
 
+const ctx = createContext().use(flakyPlugin).build();
 try {
-  await createContext().use(flakyPlugin).ready();
+  await ctx.ready();
 } catch (err) {
   if (err instanceof PluginSetupError) {
     console.log(err.pluginName); // 'flaky'
     console.log(err.cause);      // original error
+  }
+}
+```
+
+### `ReservedKeyError`
+
+Thrown during `ctx.ready()` if a plugin tries to add a key that is a reserved context method (`ready` or `close`).
+
+```ts
+import { ReservedKeyError } from 'ctx-inject';
+
+const bad = plugin({
+  name: 'bad',
+  setup: () => ({ ready: () => {} }), // "ready" is reserved
+});
+
+const ctx = createContext().use(bad).build();
+try {
+  await ctx.ready();
+} catch (err) {
+  if (err instanceof ReservedKeyError) {
+    console.log(err.pluginName); // 'bad'
+    console.log(err.key);        // 'ready'
   }
 }
 ```

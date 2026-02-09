@@ -1,6 +1,6 @@
 import { test, expect, describe, mock } from 'bun:test';
 import { z } from 'zod';
-import { createContext, plugin, PluginSetupError } from '../src';
+import { createContext, plugin, PluginSetupError, ReservedKeyError } from '../src';
 
 // ─── 1. Simple plugin (no deps, sync) ────────────────────────────────────────
 
@@ -13,7 +13,8 @@ describe('simple plugin', () => {
       },
     });
 
-    const ctx = await createContext().use(greeter).ready();
+    const ctx = createContext().use(greeter).build();
+    await ctx.ready();
 
     expect(ctx.greet('World')).toBe('Hello, World!');
   });
@@ -31,7 +32,8 @@ describe('async plugin', () => {
       },
     });
 
-    const ctx = await createContext().use(asyncPlugin).ready();
+    const ctx = createContext().use(asyncPlugin).build();
+    await ctx.ready();
 
     expect(ctx.value).toBe(42);
   });
@@ -58,7 +60,8 @@ describe('plugin with dependencies', () => {
       },
     });
 
-    const ctx = await createContext().use(loggerPlugin).use(servicePlugin).ready();
+    const ctx = createContext().use(loggerPlugin).use(servicePlugin).build();
+    await ctx.ready();
 
     expect(ctx.service.result).toEqual(['init']);
     expect(ctx.logger.log('test')).toEqual(['test']);
@@ -92,7 +95,8 @@ describe('transitive dependencies', () => {
       },
     });
 
-    const ctx = await createContext().use(a).use(b).use(c).ready();
+    const ctx = createContext().use(a).use(b).use(c).build();
+    await ctx.ready();
 
     expect(ctx.a).toBe(1);
     expect(ctx.b).toBe(2);
@@ -111,7 +115,8 @@ describe('duplicate plugin', () => {
       setup: setupFn,
     });
 
-    const ctx = await createContext().use(p).use(p).ready();
+    const ctx = createContext().use(p).use(p).build();
+    await ctx.ready();
 
     expect(setupFn).toHaveBeenCalledTimes(1);
     expect(ctx.val).toBe('once');
@@ -129,14 +134,13 @@ describe('ready idempotency', () => {
       setup: setupFn,
     });
 
-    const builder = createContext().use(p);
-    const p1 = builder.ready();
-    const p2 = builder.ready();
+    const ctx = createContext().use(p).build();
+    const p1 = ctx.ready();
+    const p2 = ctx.ready();
 
     expect(p1).toBe(p2);
 
-    const [ctx1, ctx2] = await Promise.all([p1, p2]);
-    expect(ctx1).toBe(ctx2);
+    await Promise.all([p1, p2]);
     expect(setupFn).toHaveBeenCalledTimes(1);
   });
 });
@@ -157,9 +161,8 @@ describe('missing dependency', () => {
     });
 
     // Cast to bypass type constraint — runtime should still catch it
-    await expect((createContext() as any).use(b).ready()).rejects.toThrow(
-      /requires "a" to be registered before it/,
-    );
+    const ctx = (createContext() as any).use(b).build();
+    await expect(ctx.ready()).rejects.toThrow(/requires "a" to be registered before it/);
   });
 });
 
@@ -195,7 +198,8 @@ describe('dispose', () => {
       },
     });
 
-    const ctx = await createContext().use(first).use(second).use(third).ready();
+    const ctx = createContext().use(first).use(second).use(third).build();
+    await ctx.ready();
 
     await ctx.close();
     expect(order).toEqual(['third', 'second', 'first']);
@@ -216,7 +220,8 @@ describe('dispose', () => {
       dispose: disposeFn,
     });
 
-    const ctx = await createContext().use(p).ready();
+    const ctx = createContext().use(p).build();
+    await ctx.ready();
 
     const c1 = ctx.close();
     const c2 = ctx.close();
@@ -232,7 +237,8 @@ describe('dispose', () => {
       setup: () => ({ x: 1 }),
     });
 
-    const ctx = await createContext().use(p).ready();
+    const ctx = createContext().use(p).build();
+    await ctx.ready();
 
     expect(Object.keys(ctx)).toEqual(['x']);
     expect(typeof ctx.close).toBe('function');
@@ -251,7 +257,8 @@ describe('plugin with options', () => {
       },
     });
 
-    const ctx = await createContext().use(configPlugin, { port: 3000, host: 'localhost' }).ready();
+    const ctx = createContext().use(configPlugin, { port: 3000, host: 'localhost' }).build();
+    await ctx.ready();
 
     expect(ctx.config.port).toBe(3000);
     expect(ctx.config.host).toBe('localhost');
@@ -266,11 +273,10 @@ describe('plugin with options', () => {
       },
     });
 
-    await expect(
-      createContext()
-        .use(configPlugin, { port: 'not-a-number', host: 123 } as any)
-        .ready(),
-    ).rejects.toThrow();
+    const ctx = createContext()
+      .use(configPlugin, { port: 'not-a-number', host: 123 } as any)
+      .build();
+    await expect(ctx.ready()).rejects.toThrow();
   });
 });
 
@@ -296,7 +302,8 @@ describe('setup error cleanup', () => {
       },
     });
 
-    await expect(createContext().use(good).use(bad).ready()).rejects.toThrow(PluginSetupError);
+    const ctx = createContext().use(good).use(bad).build();
+    await expect(ctx.ready()).rejects.toThrow(PluginSetupError);
 
     expect(disposed).toEqual(['good']);
   });
@@ -309,8 +316,10 @@ describe('setup error cleanup', () => {
       },
     });
 
+    const ctx = createContext().use(failing).build();
+
     try {
-      await createContext().use(failing).ready();
+      await ctx.ready();
       expect(true).toBe(false); // should not reach
     } catch (err) {
       expect(err).toBeInstanceOf(PluginSetupError);
@@ -329,7 +338,8 @@ describe('type-level correctness', () => {
       setup: () => ({ val: 'hello' }),
     });
 
-    const ctx = await createContext().use(p).ready();
+    const ctx = createContext().use(p).build();
+    await ctx.ready();
 
     // Runtime freeze check
     expect(() => {
@@ -350,7 +360,8 @@ describe('type-level correctness', () => {
       setup: () => ({ shared: 2 }),
     });
 
-    await expect(createContext().use(a).use(b).ready()).rejects.toThrow(/already exists/);
+    const ctx = createContext().use(a).use(b).build();
+    await expect(ctx.ready()).rejects.toThrow(/already exists/);
   });
 
   test('compile-time type inference works', async () => {
@@ -378,10 +389,11 @@ describe('type-level correctness', () => {
       },
     });
 
-    const ctx = await createContext()
+    const ctx = createContext()
       .use(loggerPlugin)
       .use(dbPlugin, { url: 'postgres://localhost' })
-      .ready();
+      .build();
+    await ctx.ready();
 
     // These lines verify type inference at compile time
     const _logger: Console = ctx.logger;
@@ -391,5 +403,44 @@ describe('type-level correctness', () => {
     expect(typeof _query).toBe('function');
 
     await ctx.close();
+  });
+});
+
+// ─── 11. Reserved keys ───────────────────────────────────────────────────────
+
+describe('reserved keys', () => {
+  test('plugin declaring "ready" key throws ReservedKeyError', async () => {
+    const bad = plugin({
+      name: 'bad-ready',
+      setup: () => ({ ready: () => {} }),
+    });
+
+    const ctx = createContext().use(bad).build();
+    await expect(ctx.ready()).rejects.toThrow(ReservedKeyError);
+    await expect(ctx.ready()).rejects.toThrow(/reserved context method/);
+  });
+
+  test('plugin declaring "close" key throws ReservedKeyError', async () => {
+    const bad = plugin({
+      name: 'bad-close',
+      setup: () => ({ close: () => {} }),
+    });
+
+    const ctx = createContext().use(bad).build();
+    await expect(ctx.ready()).rejects.toThrow(ReservedKeyError);
+    await expect(ctx.ready()).rejects.toThrow(/reserved context method/);
+  });
+
+  test('ready and close are non-enumerable', () => {
+    const p = plugin({
+      name: 'p',
+      setup: () => ({ x: 1 }),
+    });
+
+    const ctx = createContext().use(p).build();
+
+    expect(Object.keys(ctx)).toEqual([]);
+    expect(typeof ctx.ready).toBe('function');
+    expect(typeof ctx.close).toBe('function');
   });
 });

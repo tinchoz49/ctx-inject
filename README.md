@@ -159,9 +159,25 @@ ctx.c // 3
 // createContext().use(b).build();
 ```
 
-Duplicate registrations are skipped (build is only called once per plugin).
+Duplicate registrations throw a `DuplicatePluginError`.
 
 ## Error Handling
+
+### `DuplicatePluginError`
+
+Thrown during `.use()` if a plugin with the same name is already registered.
+
+```ts
+import { DuplicatePluginError } from 'ctx-inject';
+
+try {
+  createContext().use(myPlugin).use(myPlugin);
+} catch (err) {
+  if (err instanceof DuplicatePluginError) {
+    console.log(err.pluginName); // 'myPlugin'
+  }
+}
+```
 
 ### `PluginBuildError`
 

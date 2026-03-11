@@ -1,6 +1,6 @@
 import { test, expect, describe, mock } from 'bun:test';
 import { z } from 'zod';
-import { createContext, plugin, PluginBuildError, PluginInitError, ReservedKeyError } from '../src';
+import { createContext, plugin, DuplicatePluginError, PluginBuildError, PluginInitError, ReservedKeyError } from '../src';
 
 // ─── 1. Simple plugin (no deps, sync) ────────────────────────────────────────
 
@@ -159,19 +159,28 @@ describe('transitive dependencies', () => {
 // ─── 5. Duplicate plugin skipped ─────────────────────────────────────────────
 
 describe('duplicate plugin', () => {
-  test('build is called only once', async () => {
-    const buildFn = mock(() => ({ val: 'once' }));
-
+  test('throws DuplicatePluginError when registering the same plugin twice', () => {
     const p = plugin({
       name: 'once',
-      build: buildFn,
+      build: () => ({ val: 'once' }),
     });
 
-    const ctx = createContext().use(p).use(p).build();
-    await ctx.init();
+    expect(() => createContext().use(p).use(p)).toThrow(DuplicatePluginError);
+    expect(() => createContext().use(p).use(p)).toThrow(/already registered/);
+  });
 
-    expect(buildFn).toHaveBeenCalledTimes(1);
-    expect(ctx.val).toBe('once');
+  test('throws DuplicatePluginError for different plugins with same name', () => {
+    const p1 = plugin({
+      name: 'shared',
+      build: () => ({ a: 1 }),
+    });
+
+    const p2 = plugin({
+      name: 'shared',
+      build: () => ({ b: 2 }),
+    });
+
+    expect(() => createContext().use(p1).use(p2)).toThrow(DuplicatePluginError);
   });
 });
 

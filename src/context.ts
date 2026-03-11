@@ -1,4 +1,4 @@
-import { PluginBuildError, PluginInitError, ReservedKeyError } from './errors';
+import { DuplicatePluginError, PluginBuildError, PluginInitError, ReservedKeyError } from './errors';
 import type {
   AnyPlugin,
   Context,
@@ -30,17 +30,13 @@ export class ContextBuilder<T = {}> {
   private plugins: Map<string, PluginEntry> = new Map();
 
   /**
-   * Registers a plugin. Duplicate registrations are skipped.
+   * Registers a plugin. Throws if a plugin with the same name is already registered.
    */
   private addPlugin(entry: PluginEntry): void {
     const name = entry.plugin.name;
 
-    // Already registered — skip (but preserve options if provided later)
     if (this.plugins.has(name)) {
-      if (entry.options !== undefined) {
-        this.plugins.get(name)!.options = entry.options;
-      }
-      return;
+      throw new DuplicatePluginError(name);
     }
 
     this.plugins.set(name, entry);

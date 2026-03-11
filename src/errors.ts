@@ -5,6 +5,13 @@ export class CircularDependencyError extends Error {
   }
 }
 
+export class DuplicatePluginError extends Error {
+  constructor(public readonly pluginName: string) {
+    super(`Plugin "${pluginName}" is already registered`);
+    this.name = 'DuplicatePluginError';
+  }
+}
+
 export class ReservedKeyError extends Error {
   constructor(
     public readonly pluginName: string,

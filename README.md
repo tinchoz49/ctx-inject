@@ -27,10 +27,12 @@ const db = plugin({
   name: 'db',
   dependencies: [logger],
   options: z.object({ url: z.string() }),
-  async setup(ctx, options) {
-    ctx.logger.log('Connecting to', options.url);
-    const connection = await connect(options.url);
-    return { db: connection };
+  setup(ctx, options) {
+    ctx.logger.log('Setting up db for', options.url);
+    return { db: createConnection(options.url) };
+  },
+  async init({ db }) {
+    await db.connect();
   },
   async dispose({ db }) {
     await db.close();
@@ -57,8 +59,9 @@ await ctx.close(); // disposes in reverse order
 - **Synchronous build** - `.build()` returns the context synchronously with full type inference. Call `ctx.ready()` to initialize plugins.
 - **Plugin dependencies** - Plugins declare dependencies as a contract. TypeScript enforces that all dependencies are registered before the dependent plugin.
 - **Plugin options** - Plugins can declare a Zod schema for typed, validated configuration options.
-- **Lifecycle management** - Optional `dispose` handlers are called in reverse initialization order on `ctx.close()`.
-- **Graceful error handling** - If a plugin fails during setup, all already-initialized plugins are disposed before the error propagates.
+- **Sync setup, async init** - `setup` is synchronous for creating objects and decorating the context. Optional `init` is async for loading resources (e.g. connecting to databases).
+- **Lifecycle management** - Optional `dispose` handlers (opposite of `init`) are called in reverse initialization order on `ctx.close()`.
+- **Graceful error handling** - If a plugin fails during setup or init, all already-initialized plugins are disposed before the error propagates.
 - **Frozen context** - The context is `Object.freeze()`'d after `ready()`. The `ready()` and `close()` methods are non-enumerable.
 - **Reserved keys** - `ready` and `close` are reserved context methods. Plugins that try to add these keys will throw a `ReservedKeyError`.
 - **Zod validation** - Options are validated at runtime via Zod schemas, with full type inference.
@@ -87,12 +90,15 @@ const mailer = plugin({
   options: z.object({ apiKey: z.string() }),
   setup(ctx, options) {
     // options is { apiKey: string } — inferred from the Zod schema
-    ctx.logger.log('Mailer initialized');
+    ctx.logger.log('Mailer created');
     return {
-      sendMail: (to: string, body: string) => { /* ... */ },
+      mailer: createMailer(options.apiKey),
     };
   },
-  dispose({ sendMail }) {
+  async init({ mailer }) {
+    await mailer.verify(); // async initialization
+  },
+  dispose({ mailer }) {
     // cleanup if needed
   },
 });
@@ -105,8 +111,9 @@ const mailer = plugin({
 | `name` | Yes | Unique plugin identifier |
 | `dependencies` | No | Array of plugins this plugin depends on. Acts as a type-level contract — all must be registered via `.use()` before this plugin. |
 | `options` | No | Zod schema for plugin options. When provided, `.use()` requires a matching options argument and the value is validated at initialization time. |
-| `setup(ctx, options?)` | Yes | Receives resolved dependency context (and validated options if `options` schema is declared). Returns an object of values to add to the context. Can be async. |
-| `dispose(decorations)` | No | Teardown handler. Receives the object returned by `setup`. Can be async. |
+| `setup(ctx, options?)` | Yes | Synchronous. Receives resolved dependency context (and validated options if `options` schema is declared). Returns an object of values to add to the context. |
+| `init(decorations)` | No | Async initialization handler. Receives the object returned by `setup`. Use for loading async resources (connecting to databases, reading files, etc.). Called after `setup` and before the next plugin's `setup`. |
+| `dispose(decorations)` | No | Teardown handler (opposite of `init`). Receives the object returned by `setup`. Can be async. |
 
 ### `createContext()`
 
@@ -126,7 +133,7 @@ Returns the context object synchronously with full type inference. The context h
 
 #### `ctx.ready(): Promise<void>`
 
-Initializes all registered plugins in registration order and freezes the context. Multiple calls return the same promise — initialization only runs once.
+Initializes all registered plugins in registration order (calling `setup` synchronously then `init` asynchronously for each plugin) and freezes the context. Multiple calls return the same promise — initialization only runs once.
 
 #### `ctx.close(): Promise<void>`
 
@@ -168,6 +175,24 @@ try {
   await ctx.ready();
 } catch (err) {
   if (err instanceof PluginSetupError) {
+    console.log(err.pluginName); // 'flaky'
+    console.log(err.cause);      // original error
+  }
+}
+```
+
+### `PluginInitError`
+
+Thrown during `ctx.ready()` if a plugin's `init` function throws. All already-initialized plugins are disposed before the error propagates.
+
+```ts
+import { PluginInitError } from 'ctx-inject';
+
+const ctx = createContext().use(flakyPlugin).build();
+try {
+  await ctx.ready();
+} catch (err) {
+  if (err instanceof PluginInitError) {
     console.log(err.pluginName); // 'flaky'
     console.log(err.cause);      // original error
   }

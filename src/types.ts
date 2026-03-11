@@ -29,7 +29,8 @@ export interface Plugin<
   readonly name: string;
   readonly dependencies: TDeps;
   readonly options?: TOptions;
-  readonly setup: (ctx: any, options?: any) => TDecorations | Promise<TDecorations>;
+  readonly setup: (ctx: any, options?: any) => TDecorations;
+  readonly init?: (decorations: TDecorations) => void | Promise<void>;
   readonly dispose?: (decorations: TDecorations) => void | Promise<void>;
 }
 
@@ -130,10 +131,8 @@ export interface PluginConfigWithOptions<
   name: string;
   dependencies?: TDeps;
   options: TOptions;
-  setup: (
-    ctx: ResolveDeps<TDeps>,
-    options: ZodInput<TOptions>,
-  ) => TDecorations | Promise<TDecorations>;
+  setup: (ctx: ResolveDeps<TDeps>, options: ZodInput<TOptions>) => TDecorations;
+  init?: (decorations: TDecorations) => void | Promise<void>;
   dispose?: (decorations: TDecorations) => void | Promise<void>;
 }
 
@@ -146,6 +145,7 @@ export interface PluginConfigWithoutOptions<
 > {
   name: string;
   dependencies?: TDeps;
-  setup: (ctx: ResolveDeps<TDeps>) => TDecorations | Promise<TDecorations>;
+  setup: (ctx: ResolveDeps<TDeps>) => TDecorations;
+  init?: (decorations: TDecorations) => void | Promise<void>;
   dispose?: (decorations: TDecorations) => void | Promise<void>;
 }

@@ -26,3 +26,15 @@ export class PluginSetupError extends Error {
     this.name = 'PluginSetupError';
   }
 }
+
+export class PluginInitError extends Error {
+  constructor(
+    public readonly pluginName: string,
+    public readonly cause: unknown,
+  ) {
+    super(
+      `Plugin "${pluginName}" init failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = 'PluginInitError';
+  }
+}

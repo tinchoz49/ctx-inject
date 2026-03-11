@@ -31,6 +31,7 @@ export function plugin(config: {
   dependencies?: readonly AnyPlugin[];
   options?: ZodType;
   setup: (ctx: any, options?: any) => any;
+  init?: (decorations: any) => void | Promise<void>;
   dispose?: (decorations: any) => void | Promise<void>;
 }): AnyPlugin {
   return {
@@ -38,6 +39,7 @@ export function plugin(config: {
     dependencies: config.dependencies ?? [],
     options: config.options,
     setup: config.setup,
+    init: config.init,
     dispose: config.dispose,
   };
 }

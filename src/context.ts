@@ -1,4 +1,4 @@
-import { PluginSetupError, ReservedKeyError } from './errors';
+import { PluginInitError, PluginSetupError, ReservedKeyError } from './errors';
 import type {
   AnyPlugin,
   Context,
@@ -132,7 +132,7 @@ async function initialize(
       if (entry.plugin.options) {
         entry.options = entry.plugin.options.parse(entry.options);
       }
-      decorations = await entry.plugin.setup(ctx, entry.options);
+      decorations = entry.plugin.setup(ctx, entry.options);
     } catch (err) {
       // Dispose already-initialized plugins in reverse order
       await disposeAll(initialized);
@@ -160,6 +160,16 @@ async function initialize(
     Object.assign(ctx, decorations);
     initialized.push({ plugin: entry.plugin, decorations });
     initializedNames.add(entry.plugin.name);
+
+    // Call init (async) after setup completes and decorations are assigned
+    if (entry.plugin.init) {
+      try {
+        await entry.plugin.init(decorations);
+      } catch (err) {
+        await disposeAll(initialized);
+        throw new PluginInitError(entry.plugin.name, err);
+      }
+    }
   }
 
   Object.freeze(ctx);

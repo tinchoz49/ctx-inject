@@ -1,6 +1,6 @@
 import { test, expect, describe, mock } from 'bun:test';
 import { z } from 'zod';
-import { createContext, plugin, PluginSetupError, ReservedKeyError } from '../src';
+import { createContext, plugin, PluginInitError, PluginSetupError, ReservedKeyError } from '../src';
 
 // ─── 1. Simple plugin (no deps, sync) ────────────────────────────────────────
 
@@ -20,22 +20,64 @@ describe('simple plugin', () => {
   });
 });
 
-// ─── 2. Async plugin setup ───────────────────────────────────────────────────
+// ─── 2. Plugin with init (async lifecycle) ──────────────────────────────────
 
-describe('async plugin', () => {
-  test('awaits async setup', async () => {
+describe('plugin with init', () => {
+  test('init is called after setup with decorations', async () => {
+    const initOrder: string[] = [];
+
     const asyncPlugin = plugin({
       name: 'async',
-      async setup() {
+      setup() {
+        initOrder.push('setup');
+        return { state: { value: 0 } };
+      },
+      async init(decorations) {
         await new Promise((r) => setTimeout(r, 10));
-        return { value: 42 };
+        initOrder.push('init');
+        // Mutate the object created in setup
+        decorations.state.value = 42;
       },
     });
 
     const ctx = createContext().use(asyncPlugin).build();
     await ctx.ready();
 
-    expect(ctx.value).toBe(42);
+    expect(initOrder).toEqual(['setup', 'init']);
+    expect(ctx.state.value).toBe(42);
+  });
+
+  test('init runs per-plugin before next plugin setup', async () => {
+    const order: string[] = [];
+
+    const first = plugin({
+      name: 'first',
+      setup() {
+        order.push('first:setup');
+        return { first: { loaded: false } };
+      },
+      async init(decorations) {
+        await new Promise((r) => setTimeout(r, 10));
+        decorations.first.loaded = true;
+        order.push('first:init');
+      },
+    });
+
+    const second = plugin({
+      name: 'second',
+      dependencies: [first],
+      setup(ctx) {
+        order.push('second:setup');
+        // first's init should have run already
+        return { secondSawFirstLoaded: ctx.first.loaded };
+      },
+    });
+
+    const ctx = createContext().use(first).use(second).build();
+    await ctx.ready();
+
+    expect(order).toEqual(['first:setup', 'first:init', 'second:setup']);
+    expect(ctx.secondSawFirstLoaded).toBe(true);
   });
 });
 
@@ -329,6 +371,58 @@ describe('setup error cleanup', () => {
   });
 });
 
+// ─── 9b. Init error cleanup ──────────────────────────────────────────────────
+
+describe('init error cleanup', () => {
+  test('disposes already-initialized plugins on init failure', async () => {
+    const disposed: string[] = [];
+
+    const good = plugin({
+      name: 'good',
+      setup: () => ({ good: true }),
+      dispose: () => {
+        disposed.push('good');
+      },
+    });
+
+    const bad = plugin({
+      name: 'bad',
+      dependencies: [good],
+      setup: () => ({ bad: true }),
+      init: () => {
+        throw new Error('init boom');
+      },
+    });
+
+    const ctx = createContext().use(good).use(bad).build();
+    await expect(ctx.ready()).rejects.toThrow(PluginInitError);
+
+    // bad was added to initialized before init ran, so both should be disposed
+    expect(disposed).toEqual(['good']);
+  });
+
+  test('PluginInitError contains plugin name and cause', async () => {
+    const failing = plugin({
+      name: 'failing',
+      setup: () => ({ x: 1 }),
+      init: () => {
+        throw new Error('init original');
+      },
+    });
+
+    const ctx = createContext().use(failing).build();
+
+    try {
+      await ctx.ready();
+      expect(true).toBe(false);
+    } catch (err) {
+      expect(err).toBeInstanceOf(PluginInitError);
+      expect((err as PluginInitError).pluginName).toBe('failing');
+      expect((err as PluginInitError).cause).toBeInstanceOf(Error);
+    }
+  });
+});
+
 // ─── 10. Type-level tests ────────────────────────────────────────────────────
 
 describe('type-level correctness', () => {
@@ -376,13 +470,19 @@ describe('type-level correctness', () => {
       name: 'db',
       dependencies: [loggerPlugin],
       options: z.object({ url: z.string() }),
-      async setup(ctx, options) {
+      setup(ctx, options) {
         ctx.logger.log('Connecting to', options.url);
         const db = {
+          url: options.url,
+          connected: false,
           query: async (sql: string) => sql,
           close: async () => {},
         };
         return { db };
+      },
+      async init({ db }) {
+        // Simulate async connection
+        db.connected = true;
       },
       async dispose({ db }) {
         await db.close();

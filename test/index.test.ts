@@ -1,6 +1,6 @@
 import { test, expect, describe, mock } from 'bun:test';
 import { z } from 'zod';
-import { createContext, plugin, PluginInitError, PluginSetupError, ReservedKeyError } from '../src';
+import { createContext, plugin, PluginBuildError, PluginInitError, ReservedKeyError } from '../src';
 
 // ─── 1. Simple plugin (no deps, sync) ────────────────────────────────────────
 
@@ -8,13 +8,13 @@ describe('simple plugin', () => {
   test('registers and returns decorations', async () => {
     const greeter = plugin({
       name: 'greeter',
-      setup() {
+      build() {
         return { greet: (name: string) => `Hello, ${name}!` };
       },
     });
 
     const ctx = createContext().use(greeter).build();
-    await ctx.ready();
+    await ctx.init();
 
     expect(ctx.greet('World')).toBe('Hello, World!');
   });
@@ -23,37 +23,37 @@ describe('simple plugin', () => {
 // ─── 2. Plugin with init (async lifecycle) ──────────────────────────────────
 
 describe('plugin with init', () => {
-  test('init is called after setup with decorations', async () => {
+  test('init is called after build with decorations', async () => {
     const initOrder: string[] = [];
 
     const asyncPlugin = plugin({
       name: 'async',
-      setup() {
-        initOrder.push('setup');
+      build() {
+        initOrder.push('build');
         return { state: { value: 0 } };
       },
       async init(decorations) {
         await new Promise((r) => setTimeout(r, 10));
         initOrder.push('init');
-        // Mutate the object created in setup
+        // Mutate the object created in build
         decorations.state.value = 42;
       },
     });
 
     const ctx = createContext().use(asyncPlugin).build();
-    await ctx.ready();
+    await ctx.init();
 
-    expect(initOrder).toEqual(['setup', 'init']);
+    expect(initOrder).toEqual(['build', 'init']);
     expect(ctx.state.value).toBe(42);
   });
 
-  test('init runs per-plugin before next plugin setup', async () => {
+  test('build runs for all plugins synchronously, init runs sequentially', async () => {
     const order: string[] = [];
 
     const first = plugin({
       name: 'first',
-      setup() {
-        order.push('first:setup');
+      build() {
+        order.push('first:build');
         return { first: { loaded: false } };
       },
       async init(decorations) {
@@ -66,28 +66,38 @@ describe('plugin with init', () => {
     const second = plugin({
       name: 'second',
       dependencies: [first],
-      setup(ctx) {
-        order.push('second:setup');
-        // first's init should have run already
+      build(ctx) {
+        order.push('second:build');
+        // first's build has run but init hasn't yet
         return { secondSawFirstLoaded: ctx.first.loaded };
+      },
+      async init() {
+        order.push('second:init');
       },
     });
 
     const ctx = createContext().use(first).use(second).build();
-    await ctx.ready();
 
-    expect(order).toEqual(['first:setup', 'first:init', 'second:setup']);
-    expect(ctx.secondSawFirstLoaded).toBe(true);
+    // build runs synchronously — both builds happen before any init
+    expect(order).toEqual(['first:build', 'second:build']);
+
+    await ctx.init();
+
+    expect(order).toEqual(['first:build', 'second:build', 'first:init', 'second:init']);
+    // second's build saw first.loaded as false (init hadn't run yet)
+    expect(ctx.secondSawFirstLoaded).toBe(false);
+    // but after init, first.loaded is true
+    expect(ctx.first.loaded).toBe(true);
   });
 });
 
 // ─── 3. Plugin with dependencies — type inference ────────────────────────────
 
 describe('plugin with dependencies', () => {
-  test('receives dependency context in setup', async () => {
+  test('receives dependency context in build', async () => {
     const loggerPlugin = plugin({
       name: 'logger',
-      setup() {
+      build() {
         return { logger: { log: (...args: unknown[]) => args } };
       },
     });
@@ -95,7 +105,7 @@ describe('plugin with dependencies', () => {
     const servicePlugin = plugin({
       name: 'service',
       dependencies: [loggerPlugin],
-      setup(ctx) {
+      build(ctx) {
         // ctx.logger should be available
         const result = ctx.logger.log('init');
         return { service: { result } };
@@ -103,7 +113,7 @@ describe('plugin with dependencies', () => {
     });
 
     const ctx = createContext().use(loggerPlugin).use(servicePlugin).build();
-    await ctx.ready();
+    await ctx.init();
 
     expect(ctx.service.result).toEqual(['init']);
     expect(ctx.logger.log('test')).toEqual(['test']);
@@ -116,7 +126,7 @@ describe('transitive dependencies', () => {
   test('all dependencies must be explicitly registered in order', async () => {
     const a = plugin({
       name: 'a',
-      setup() {
+      build() {
         return { a: 1 };
       },
     });
@@ -124,7 +134,7 @@ describe('transitive dependencies', () => {
     const b = plugin({
       name: 'b',
       dependencies: [a],
-      setup(ctx) {
+      build(ctx) {
         return { b: ctx.a + 1 };
       },
     });
@@ -132,13 +142,13 @@ describe('transitive dependencies', () => {
     const c = plugin({
       name: 'c',
       dependencies: [b],
-      setup(ctx) {
+      build(ctx) {
         return { c: ctx.a + ctx.b };
       },
     });
 
     const ctx = createContext().use(a).use(b).use(c).build();
-    await ctx.ready();
+    await ctx.init();
 
     expect(ctx.a).toBe(1);
     expect(ctx.b).toBe(2);
@@ -149,62 +159,64 @@ describe('transitive dependencies', () => {
 // ─── 5. Duplicate plugin skipped ─────────────────────────────────────────────
 
 describe('duplicate plugin', () => {
-  test('setup is called only once', async () => {
-    const setupFn = mock(() => ({ val: 'once' }));
+  test('build is called only once', async () => {
+    const buildFn = mock(() => ({ val: 'once' }));
 
     const p = plugin({
       name: 'once',
-      setup: setupFn,
+      build: buildFn,
     });
 
     const ctx = createContext().use(p).use(p).build();
-    await ctx.ready();
+    await ctx.init();
 
-    expect(setupFn).toHaveBeenCalledTimes(1);
+    expect(buildFn).toHaveBeenCalledTimes(1);
     expect(ctx.val).toBe('once');
   });
 });
 
-// ─── 5b. ready() idempotency ─────────────────────────────────────────────────
+// ─── 5b. init() idempotency ─────────────────────────────────────────────────
 
-describe('ready idempotency', () => {
-  test('multiple ready() calls return the same promise and run setup once', async () => {
-    const setupFn = mock(() => ({ val: 'once' }));
+describe('init idempotency', () => {
+  test('multiple init() calls return the same promise and run init once', async () => {
+    const initFn = mock(async () => {});
 
     const p = plugin({
       name: 'idem',
-      setup: setupFn,
+      build: () => ({ val: 'once' }),
+      init: initFn,
     });
 
     const ctx = createContext().use(p).build();
-    const p1 = ctx.ready();
-    const p2 = ctx.ready();
+    const p1 = ctx.init();
+    const p2 = ctx.init();
 
     expect(p1).toBe(p2);
 
     await Promise.all([p1, p2]);
-    expect(setupFn).toHaveBeenCalledTimes(1);
+    expect(initFn).toHaveBeenCalledTimes(1);
   });
 });
 
 // ─── 6. Missing dependency detection ─────────────────────────────────────────
 
 describe('missing dependency', () => {
-  test('throws when dependency is not registered', async () => {
+  test('throws when dependency is not registered', () => {
     const a = plugin({
       name: 'a',
-      setup: () => ({ a: 1 }),
+      build: () => ({ a: 1 }),
     });
 
     const b = plugin({
       name: 'b',
       dependencies: [a],
-      setup: () => ({ b: 2 }),
+      build: () => ({ b: 2 }),
     });
 
     // Cast to bypass type constraint — runtime should still catch it
-    const ctx = (createContext() as any).use(b).build();
-    await expect(ctx.ready()).rejects.toThrow(/requires "a" to be registered before it/);
+    expect(() => (createContext() as any).use(b).build()).toThrow(
+      /requires "a" to be registered before it/,
+    );
   });
 });
 
@@ -216,7 +228,7 @@ describe('dispose', () => {
 
     const first = plugin({
       name: 'first',
-      setup: () => ({ first: true }),
+      build: () => ({ first: true }),
       dispose: () => {
         order.push('first');
       },
@@ -225,7 +237,7 @@ describe('dispose', () => {
     const second = plugin({
       name: 'second',
       dependencies: [first],
-      setup: () => ({ second: true }),
+      build: () => ({ second: true }),
       dispose: () => {
         order.push('second');
       },
@@ -234,14 +246,14 @@ describe('dispose', () => {
     const third = plugin({
       name: 'third',
       dependencies: [second],
-      setup: () => ({ third: true }),
+      build: () => ({ third: true }),
       dispose: () => {
         order.push('third');
       },
     });
 
     const ctx = createContext().use(first).use(second).use(third).build();
-    await ctx.ready();
+    await ctx.init();
 
     await ctx.close();
     expect(order).toEqual(['third', 'second', 'first']);
@@ -258,12 +270,12 @@ describe('dispose', () => {
 
     const p = plugin({
       name: 'slow-dispose',
-      setup: () => ({ slow: true }),
+      build: () => ({ slow: true }),
       dispose: disposeFn,
     });
 
     const ctx = createContext().use(p).build();
-    await ctx.ready();
+    await ctx.init();
 
     const c1 = ctx.close();
     const c2 = ctx.close();
@@ -276,11 +288,11 @@ describe('dispose', () => {
   test('close is non-enumerable', async () => {
     const p = plugin({
       name: 'p',
-      setup: () => ({ x: 1 }),
+      build: () => ({ x: 1 }),
     });
 
     const ctx = createContext().use(p).build();
-    await ctx.ready();
+    await ctx.init();
 
     expect(Object.keys(ctx)).toEqual(['x']);
     expect(typeof ctx.close).toBe('function');
@@ -290,83 +302,74 @@ describe('dispose', () => {
 // ─── 8. Plugin with options (Zod schema) ────────────────────────────────────
 
 describe('plugin with options', () => {
-  test('passes validated options to setup', async () => {
+  test('passes validated options to build', async () => {
     const configPlugin = plugin({
       name: 'config',
       options: z.object({ port: z.number(), host: z.string() }),
-      setup(_ctx, options) {
+      build(_ctx, options) {
         return { config: { port: options.port, host: options.host } };
       },
     });
 
     const ctx = createContext().use(configPlugin, { port: 3000, host: 'localhost' }).build();
-    await ctx.ready();
+    await ctx.init();
 
     expect(ctx.config.port).toBe(3000);
     expect(ctx.config.host).toBe('localhost');
   });
 
-  test('throws on invalid options', async () => {
+  test('throws on invalid options', () => {
     const configPlugin = plugin({
       name: 'config',
       options: z.object({ port: z.number(), host: z.string() }),
-      setup(_ctx, options) {
+      build(_ctx, options) {
         return { config: options };
       },
     });
 
-    const ctx = createContext()
-      .use(configPlugin, { port: 'not-a-number', host: 123 } as any)
-      .build();
-    await expect(ctx.ready()).rejects.toThrow();
+    expect(() =>
+      createContext()
+        .use(configPlugin, { port: 'not-a-number', host: 123 } as any)
+        .build(),
+    ).toThrow();
   });
 });
 
-// ─── 9. Error during setup triggers cleanup ──────────────────────────────────
+// ─── 9. Error during build triggers cleanup ──────────────────────────────────
 
-describe('setup error cleanup', () => {
-  test('disposes already-initialized plugins on failure', async () => {
-    const disposed: string[] = [];
-
+describe('build error', () => {
+  test('throws PluginBuildError on failure', () => {
     const good = plugin({
       name: 'good',
-      setup: () => ({ good: true }),
-      dispose: () => {
-        disposed.push('good');
-      },
+      build: () => ({ good: true }),
     });
 
     const bad = plugin({
       name: 'bad',
       dependencies: [good],
-      setup: (): Record<string, unknown> => {
+      build: (): Record<string, unknown> => {
         throw new Error('boom');
       },
     });
 
-    const ctx = createContext().use(good).use(bad).build();
-    await expect(ctx.ready()).rejects.toThrow(PluginSetupError);
-
-    expect(disposed).toEqual(['good']);
+    expect(() => createContext().use(good).use(bad).build()).toThrow(PluginBuildError);
   });
 
-  test('PluginSetupError contains plugin name and cause', async () => {
+  test('PluginBuildError contains plugin name and cause', () => {
     const failing = plugin({
       name: 'failing',
-      setup: (): Record<string, unknown> => {
+      build: (): Record<string, unknown> => {
         throw new Error('original');
       },
     });
 
-    const ctx = createContext().use(failing).build();
-
     try {
-      await ctx.ready();
+      createContext().use(failing).build();
       expect(true).toBe(false); // should not reach
     } catch (err) {
-      expect(err).toBeInstanceOf(PluginSetupError);
-      expect((err as PluginSetupError).pluginName).toBe('failing');
-      expect((err as PluginSetupError).cause).toBeInstanceOf(Error);
+      expect(err).toBeInstanceOf(PluginBuildError);
+      expect((err as PluginBuildError).pluginName).toBe('failing');
+      expect((err as PluginBuildError).cause).toBeInstanceOf(Error);
     }
   });
 });
@@ -379,7 +382,7 @@ describe('init error cleanup', () => {
 
     const good = plugin({
       name: 'good',
-      setup: () => ({ good: true }),
+      build: () => ({ good: true }),
       dispose: () => {
         disposed.push('good');
       },
@@ -388,23 +391,23 @@ describe('init error cleanup', () => {
     const bad = plugin({
       name: 'bad',
       dependencies: [good],
-      setup: () => ({ bad: true }),
+      build: () => ({ bad: true }),
       init: () => {
         throw new Error('init boom');
       },
     });
 
     const ctx = createContext().use(good).use(bad).build();
-    await expect(ctx.ready()).rejects.toThrow(PluginInitError);
+    await expect(ctx.init()).rejects.toThrow(PluginInitError);
 
-    // bad was added to initialized before init ran, so both should be disposed
+    // both should be disposed
     expect(disposed).toEqual(['good']);
   });
 
   test('PluginInitError contains plugin name and cause', async () => {
     const failing = plugin({
       name: 'failing',
-      setup: () => ({ x: 1 }),
+      build: () => ({ x: 1 }),
       init: () => {
         throw new Error('init original');
       },
@@ -413,7 +416,7 @@ describe('init error cleanup', () => {
     const ctx = createContext().use(failing).build();
 
     try {
-      await ctx.ready();
+      await ctx.init();
       expect(true).toBe(false);
     } catch (err) {
       expect(err).toBeInstanceOf(PluginInitError);
@@ -429,11 +432,11 @@ describe('type-level correctness', () => {
   test('context is readonly (frozen)', async () => {
     const p = plugin({
       name: 'p',
-      setup: () => ({ val: 'hello' }),
+      build: () => ({ val: 'hello' }),
     });
 
     const ctx = createContext().use(p).build();
-    await ctx.ready();
+    await ctx.init();
 
     // Runtime freeze check
     expect(() => {
@@ -443,25 +446,24 @@ describe('type-level correctness', () => {
     expect(ctx.val).toBe('hello');
   });
 
-  test('key collision throws', async () => {
+  test('key collision throws', () => {
     const a = plugin({
       name: 'a',
-      setup: () => ({ shared: 1 }),
+      build: () => ({ shared: 1 }),
     });
 
     const b = plugin({
       name: 'b',
-      setup: () => ({ shared: 2 }),
+      build: () => ({ shared: 2 }),
     });
 
-    const ctx = createContext().use(a).use(b).build();
-    await expect(ctx.ready()).rejects.toThrow(/already exists/);
+    expect(() => createContext().use(a).use(b).build()).toThrow(/already exists/);
   });
 
   test('compile-time type inference works', async () => {
     const loggerPlugin = plugin({
       name: 'logger',
-      setup() {
+      build() {
         return { logger: console };
       },
     });
@@ -470,7 +472,7 @@ describe('type-level correctness', () => {
       name: 'db',
       dependencies: [loggerPlugin],
       options: z.object({ url: z.string() }),
-      setup(ctx, options) {
+      build(ctx, options) {
         ctx.logger.log('Connecting to', options.url);
         const db = {
           url: options.url,
@@ -493,7 +495,7 @@ describe('type-level correctness', () => {
       .use(loggerPlugin)
       .use(dbPlugin, { url: 'postgres://localhost' })
       .build();
-    await ctx.ready();
+    await ctx.init();
 
     // These lines verify type inference at compile time
     const _logger: Console = ctx.logger;
@@ -509,38 +511,36 @@ describe('type-level correctness', () => {
 // ─── 11. Reserved keys ───────────────────────────────────────────────────────
 
 describe('reserved keys', () => {
-  test('plugin declaring "ready" key throws ReservedKeyError', async () => {
+  test('plugin declaring "init" key throws ReservedKeyError', () => {
     const bad = plugin({
-      name: 'bad-ready',
-      setup: () => ({ ready: () => {} }),
+      name: 'bad-init',
+      build: () => ({ init: () => {} }),
     });
 
-    const ctx = createContext().use(bad).build();
-    await expect(ctx.ready()).rejects.toThrow(ReservedKeyError);
-    await expect(ctx.ready()).rejects.toThrow(/reserved context method/);
+    expect(() => createContext().use(bad).build()).toThrow(ReservedKeyError);
+    expect(() => createContext().use(bad).build()).toThrow(/reserved context method/);
   });
 
-  test('plugin declaring "close" key throws ReservedKeyError', async () => {
+  test('plugin declaring "close" key throws ReservedKeyError', () => {
     const bad = plugin({
       name: 'bad-close',
-      setup: () => ({ close: () => {} }),
+      build: () => ({ close: () => {} }),
     });
 
-    const ctx = createContext().use(bad).build();
-    await expect(ctx.ready()).rejects.toThrow(ReservedKeyError);
-    await expect(ctx.ready()).rejects.toThrow(/reserved context method/);
+    expect(() => createContext().use(bad).build()).toThrow(ReservedKeyError);
+    expect(() => createContext().use(bad).build()).toThrow(/reserved context method/);
   });
 
-  test('ready and close are non-enumerable', () => {
+  test('init and close are non-enumerable', () => {
     const p = plugin({
       name: 'p',
-      setup: () => ({ x: 1 }),
+      build: () => ({ x: 1 }),
     });
 
     const ctx = createContext().use(p).build();
 
-    expect(Object.keys(ctx)).toEqual([]);
-    expect(typeof ctx.ready).toBe('function');
+    expect(Object.keys(ctx)).toEqual(['x']);
+    expect(typeof ctx.init).toBe('function');
     expect(typeof ctx.close).toBe('function');
   });
 });

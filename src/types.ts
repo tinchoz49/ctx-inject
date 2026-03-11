@@ -29,7 +29,7 @@ export interface Plugin<
   readonly name: string;
   readonly dependencies: TDeps;
   readonly options?: TOptions;
-  readonly setup: (ctx: any, options?: any) => TDecorations;
+  readonly build: (ctx: any, options?: any) => TDecorations;
   readonly init?: (decorations: TDecorations) => void | Promise<void>;
   readonly dispose?: (decorations: TDecorations) => void | Promise<void>;
 }
@@ -97,7 +97,7 @@ export type ResolveDeps<Deps extends readonly AnyPlugin[]> = ResolveDepsImpl<Dep
  * The initialized context: a frozen object with all accumulated decorations
  * plus a non-enumerable `close()` method.
  */
-export type Context<T> = Readonly<T> & { ready(): Promise<void>; close(): Promise<void> };
+export type Context<T> = Readonly<T> & { init(): Promise<void>; close(): Promise<void> };
 
 /**
  * Extracts the options type from a plugin with options.
@@ -131,13 +131,13 @@ export interface PluginConfigWithOptions<
   name: string;
   dependencies?: TDeps;
   options: TOptions;
-  setup: (ctx: ResolveDeps<TDeps>, options: ZodInput<TOptions>) => TDecorations;
+  build: (ctx: ResolveDeps<TDeps>, options: ZodInput<TOptions>) => TDecorations;
   init?: (decorations: TDecorations) => void | Promise<void>;
   dispose?: (decorations: TDecorations) => void | Promise<void>;
 }
 
 /**
- * Config object passed to the `plugin()` factory when setup takes no options.
+ * Config object passed to the `plugin()` factory when build takes no options.
  */
 export interface PluginConfigWithoutOptions<
   TDecorations extends Record<string, unknown>,
@@ -145,7 +145,7 @@ export interface PluginConfigWithoutOptions<
 > {
   name: string;
   dependencies?: TDeps;
-  setup: (ctx: ResolveDeps<TDeps>) => TDecorations;
+  build: (ctx: ResolveDeps<TDeps>) => TDecorations;
   init?: (decorations: TDecorations) => void | Promise<void>;
   dispose?: (decorations: TDecorations) => void | Promise<void>;
 }

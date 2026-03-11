@@ -30,7 +30,7 @@ export function plugin(config: {
   name: string;
   dependencies?: readonly AnyPlugin[];
   options?: ZodType;
-  setup: (ctx: any, options?: any) => any;
+  build: (ctx: any, options?: any) => any;
   init?: (decorations: any) => void | Promise<void>;
   dispose?: (decorations: any) => void | Promise<void>;
 }): AnyPlugin {
@@ -38,7 +38,7 @@ export function plugin(config: {
     name: config.name,
     dependencies: config.dependencies ?? [],
     options: config.options,
-    setup: config.setup,
+    build: config.build,
     init: config.init,
     dispose: config.dispose,
   };

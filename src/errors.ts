@@ -15,15 +15,15 @@ export class ReservedKeyError extends Error {
   }
 }
 
-export class PluginSetupError extends Error {
+export class PluginBuildError extends Error {
   constructor(
     public readonly pluginName: string,
     public readonly cause: unknown,
   ) {
     super(
-      `Plugin "${pluginName}" setup failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      `Plugin "${pluginName}" build failed: ${cause instanceof Error ? cause.message : String(cause)}`,
     );
-    this.name = 'PluginSetupError';
+    this.name = 'PluginBuildError';
   }
 }
 

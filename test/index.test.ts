@@ -1,6 +1,13 @@
 import { test, expect, describe, mock } from 'bun:test';
 import { z } from 'zod';
-import { createContext, plugin, DuplicatePluginError, PluginBuildError, PluginInitError, ReservedKeyError } from '../src';
+import {
+  createContext,
+  plugin,
+  DuplicatePluginError,
+  PluginBuildError,
+  PluginInitError,
+  ReservedKeyError,
+} from '../src';
 
 // ─── 1. Simple plugin (no deps, sync) ────────────────────────────────────────
 

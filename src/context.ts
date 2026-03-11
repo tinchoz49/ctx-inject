@@ -1,4 +1,9 @@
-import { DuplicatePluginError, PluginBuildError, PluginInitError, ReservedKeyError } from './errors';
+import {
+  DuplicatePluginError,
+  PluginBuildError,
+  PluginInitError,
+  ReservedKeyError,
+} from './errors';
 import type {
   AnyPlugin,
   Context,

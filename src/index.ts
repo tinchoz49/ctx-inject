@@ -1,6 +1,11 @@
 export { createContext, ContextBuilder } from './context';
 export { plugin } from './plugin';
-export { DuplicatePluginError, PluginBuildError, PluginInitError, ReservedKeyError } from './errors';
+export {
+  DuplicatePluginError,
+  PluginBuildError,
+  PluginInitError,
+  ReservedKeyError,
+} from './errors';
 export type {
   Plugin,
   PluginWithOptions,
